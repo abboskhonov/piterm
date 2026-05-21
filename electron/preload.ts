@@ -1,15 +1,23 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
-  AppInfo,
   ElectronAPI,
-  WorkspaceInfo,
-  SessionListItem,
-  AddWorkspaceResult,
 } from '../types/electron-api'
 
+// Per-session callback registries for PTY events
+const ptyDataCallbacks = new Map<string, Set<(data: string) => void>>()
+const ptyExitCallbacks = new Map<string, Set<(exitCode: number | null, signal: number | null) => void>>()
+
+ipcRenderer.on('pty-data', (_event, key: string, data: string) => {
+  ptyDataCallbacks.get(key)?.forEach((cb) => cb(data))
+})
+
+ipcRenderer.on('pty-exit', (_event, key: string, payload: { exitCode: number | null; signal: number | null }) => {
+  ptyExitCallbacks.get(key)?.forEach((cb) => cb(payload.exitCode, payload.signal))
+})
+
 const api: ElectronAPI = {
-  getAppInfo: (): Promise<AppInfo> => ipcRenderer.invoke('get-app-info'),
-  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('open-external', url),
+  getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
   platform: process.platform,
   versions: {
     node: process.versions.node,
@@ -18,51 +26,43 @@ const api: ElectronAPI = {
   },
 
   // Workspaces & Sessions
-  getWorkspaces: (): Promise<WorkspaceInfo[]> => ipcRenderer.invoke('get-workspaces'),
-  getSessions: (workspacePath: string): Promise<SessionListItem[]> =>
-    ipcRenderer.invoke('get-sessions', workspacePath),
-  addWorkspace: (): Promise<AddWorkspaceResult> => ipcRenderer.invoke('add-workspace'),
-  removeWorkspace: (path: string): Promise<void> => ipcRenderer.invoke('remove-workspace', path),
-  openSession: (path: string): Promise<void> => ipcRenderer.invoke('open-session', path),
-  newSession: (cwd?: string): Promise<void> => ipcRenderer.invoke('new-session', cwd),
-  renameSession: (path: string, newTitle: string): Promise<void> =>
-    ipcRenderer.invoke('rename-session', path, newTitle),
-  deleteSession: (path: string): Promise<void> =>
-    ipcRenderer.invoke('delete-session', path),
-  pinSession: (path: string, pinned: boolean): Promise<void> =>
-    ipcRenderer.invoke('pin-session', path, pinned),
+  getWorkspaces: () => ipcRenderer.invoke('get-workspaces'),
+  getSessions: (workspacePath) => ipcRenderer.invoke('get-sessions', workspacePath),
+  addWorkspace: () => ipcRenderer.invoke('add-workspace'),
+  removeWorkspace: (path) => ipcRenderer.invoke('remove-workspace', path),
+  openSession: (path) => ipcRenderer.invoke('open-session', path),
+  newSession: (key, cwd, initialPrompt, model) => ipcRenderer.invoke('new-session', key, cwd, initialPrompt, model),
+  renameSession: (path, newTitle) => ipcRenderer.invoke('rename-session', path, newTitle),
+  deleteSession: (path) => ipcRenderer.invoke('delete-session', path),
+  pinSession: (path, pinned) => ipcRenderer.invoke('pin-session', path, pinned),
+
+  // Models
+  getModels: () => ipcRenderer.invoke('get-models'),
+  getDefaultModel: () => ipcRenderer.invoke('get-default-model'),
+  setDefaultModel: (provider, modelId) => ipcRenderer.invoke('set-default-model', provider, modelId),
 
   // Terminal
-  ptyInput: (data: string): Promise<void> => ipcRenderer.invoke('pty-input', data),
-  ptyResize: (cols: number, rows: number): Promise<void> => ipcRenderer.invoke('pty-resize', cols, rows),
-  ptyKill: (): Promise<void> => ipcRenderer.invoke('pty-kill'),
+  ptyInput: (key, data) => ipcRenderer.invoke('pty-input', key, data),
+  ptyResize: (key, cols, rows) => ipcRenderer.invoke('pty-resize', key, cols, rows),
+  ptyKill: (key) => ipcRenderer.invoke('pty-kill', key),
+  getActivePtySessions: () => ipcRenderer.invoke('get-active-pty-sessions'),
 
   // Skills
-  getInstalledSkills: (): Promise<Array<{ name: string; description: string; path: string; source: string }>> =>
-    ipcRenderer.invoke('get-installed-skills'),
-
-  searchSkills: (query: string): Promise<{ skills: Array<{ id: string; skillId: string; name: string; installs: number; source: string }> }> =>
-    ipcRenderer.invoke('search-skills', query),
-
-  installSkill: (spec: string, global: boolean, cwd?: string): Promise<{ success: boolean; stdout: string; stderr: string }> =>
-    ipcRenderer.invoke('install-skill', spec, global, cwd),
+  getInstalledSkills: () => ipcRenderer.invoke('get-installed-skills'),
+  searchSkills: (query) => ipcRenderer.invoke('search-skills', query),
+  installSkill: (spec, global, cwd) => ipcRenderer.invoke('install-skill', spec, global, cwd),
 
   // Extensions
-  searchExtensions: (query: string): Promise<{ packages: Array<{ name: string; description: string; version: string; keywords?: string[] }> }> =>
-    ipcRenderer.invoke('search-extensions', query),
-
-  installExtension: (packageName: string): Promise<{ success: boolean; stdout: string; stderr: string }> =>
-    ipcRenderer.invoke('install-extension', packageName),
-
-  getInstalledExtensions: (): Promise<Array<{ name: string; version: string; description?: string; installedAt?: string }>> =>
-    ipcRenderer.invoke('get-installed-extensions'),
+  searchExtensions: (query) => ipcRenderer.invoke('search-extensions', query),
+  installExtension: (packageName) => ipcRenderer.invoke('install-extension', packageName),
+  getInstalledExtensions: () => ipcRenderer.invoke('get-installed-extensions'),
 
   // Window controls
-  windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
-  windowMaximize: (): Promise<void> => ipcRenderer.invoke('window-maximize'),
-  windowClose: (): Promise<void> => ipcRenderer.invoke('window-close'),
-  windowIsMaximized: (): Promise<boolean> => ipcRenderer.invoke('window-is-maximized'),
-  onWindowMaximized: (callback: (isMaximized: boolean) => void): (() => void) => {
+  windowMinimize: () => ipcRenderer.invoke('window-minimize'),
+  windowMaximize: () => ipcRenderer.invoke('window-maximize'),
+  windowClose: () => ipcRenderer.invoke('window-close'),
+  windowIsMaximized: () => ipcRenderer.invoke('window-is-maximized'),
+  onWindowMaximized: (callback) => {
     const handler = (_event: unknown, isMaximized: boolean) => callback(isMaximized)
     ipcRenderer.on('window-maximized', handler)
     return () => {
@@ -71,25 +71,29 @@ const api: ElectronAPI = {
   },
 
   // Events
-  onSessionIndexUpdated: (callback: () => void): (() => void) => {
+  onSessionIndexUpdated: (callback) => {
     const handler = () => callback()
     ipcRenderer.on('session-index-updated', handler)
     return () => {
       ipcRenderer.removeListener('session-index-updated', handler)
     }
   },
-  onPtyData: (callback: (data: string) => void): (() => void) => {
-    const handler = (_event: unknown, data: string) => callback(data)
-    ipcRenderer.on('pty-data', handler)
+  onPtyData: (sessionKey, callback) => {
+    if (!ptyDataCallbacks.has(sessionKey)) {
+      ptyDataCallbacks.set(sessionKey, new Set())
+    }
+    ptyDataCallbacks.get(sessionKey)!.add(callback)
     return () => {
-      ipcRenderer.removeListener('pty-data', handler)
+      ptyDataCallbacks.get(sessionKey)?.delete(callback)
     }
   },
-  onPtyExit: (callback: (code: number | null, signal: number | null) => void): (() => void) => {
-    const handler = (_event: unknown, { exitCode, signal }: { exitCode: number | null; signal: number | null }) => callback(exitCode, signal)
-    ipcRenderer.on('pty-exit', handler)
+  onPtyExit: (sessionKey, callback) => {
+    if (!ptyExitCallbacks.has(sessionKey)) {
+      ptyExitCallbacks.set(sessionKey, new Set())
+    }
+    ptyExitCallbacks.get(sessionKey)!.add(callback)
     return () => {
-      ipcRenderer.removeListener('pty-exit', handler)
+      ptyExitCallbacks.get(sessionKey)?.delete(callback)
     }
   },
 }

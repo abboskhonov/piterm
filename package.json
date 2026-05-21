@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Pi Desktop — Electron app built with React, Vite, and shadcn/ui",
   "author": "Pi Desktop <pi@example.com>",
-  "main": "out/main/index.js",
+  "main": "out/main/main.js",
   "scripts": {
     "dev": "electron-vite dev -- --ozone-platform=x11 --no-sandbox",
     "build": "electron-vite build",

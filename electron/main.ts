@@ -1,12 +1,40 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { spawn, execSync } from 'node:child_process'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { spawn as spawnPty } from 'node-pty'
 import { readWindowState, writeWindowState } from './window-state'
 import { SessionIndexStore } from './sessionIndex'
+
+// ─── Resolve pi binary ─────────────────────────────────────────────────────
+function resolvePiBinary(): string {
+  // 1. Try via shell (sources .bashrc / .zshrc)
+  try {
+    const shell = process.env.SHELL || '/bin/bash'
+    const which = execSync(`${shell} -ilc "which pi"`, { encoding: 'utf-8', timeout: 3000 }).trim()
+    if (which && existsSync(which)) return which
+  } catch { /* ignore */ }
+
+  // 2. Try common npm global bin locations
+  const candidates = [
+    path.join(homedir(), '.npm-global', 'bin', 'pi'),
+    path.join(homedir(), '.local', 'bin', 'pi'),
+    path.join(homedir(), '.nvm', 'versions', 'node', process.versions.node, 'bin', 'pi'),
+    '/usr/local/bin/pi',
+    '/usr/bin/pi',
+    '/opt/homebrew/bin/pi',
+  ]
+  for (const c of candidates) {
+    if (existsSync(c)) return c
+  }
+
+  // 3. Fallback — hope PATH is correct at runtime
+  return 'pi'
+}
+
+const PI_BINARY = resolvePiBinary()
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -25,16 +53,22 @@ let sessionIndex: SessionIndexStore | null = null
 // ─── Terminal Manager ────────────────────────────────────────────────────────
 
 class TerminalManager {
-  private pty: ReturnType<typeof spawnPty> | null = null
-  private cwd: string | null = null
+  private ptys = new Map<string, ReturnType<typeof spawnPty>>()
+  private cwdMap = new Map<string, string>()
 
-  spawn(cwd: string, sessionFile?: string): void {
-    this.dispose()
+  spawn(key: string, cwd: string, sessionFile?: string, initialPrompt?: string, model?: string): void {
+    if (this.ptys.has(key)) return // Already running
 
-    const shell = process.platform === 'win32' ? 'pi.exe' : 'pi'
+    const shell = process.platform === 'win32' ? 'pi.exe' : PI_BINARY
     const args = sessionFile ? ['--session', sessionFile] : []
+    if (model) {
+      args.push('--model', model)
+    }
+    if (initialPrompt) {
+      args.push(initialPrompt)
+    }
 
-    this.pty = spawnPty(shell, args, {
+    const pty = spawnPty(shell, args, {
       name: 'xterm-256color',
       cols: 120,
       rows: 30,
@@ -42,36 +76,52 @@ class TerminalManager {
       env: process.env,
     })
 
-    this.cwd = cwd
+    this.ptys.set(key, pty)
+    this.cwdMap.set(key, cwd)
 
-    this.pty.onData((data) => {
-      mainWindow?.webContents.send('pty-data', data)
+    pty.onData((data) => {
+      mainWindow?.webContents.send('pty-data', key, data)
     })
 
-    this.pty.onExit(({ exitCode, signal }) => {
-      mainWindow?.webContents.send('pty-exit', { exitCode, signal })
-      // Refresh sessions when terminal exits
-      if (this.cwd) {
-        sessionIndex?.refreshSessions(this.cwd)
+    pty.onExit(({ exitCode, signal }) => {
+      mainWindow?.webContents.send('pty-exit', key, { exitCode, signal })
+      const ptyCwd = this.cwdMap.get(key)
+      if (ptyCwd) {
+        sessionIndex?.refreshSessions(ptyCwd)
         mainWindow?.webContents.send('session-index-updated')
       }
-      this.pty = null
+      this.ptys.delete(key)
+      this.cwdMap.delete(key)
     })
   }
 
-  write(data: string): void {
-    this.pty?.write(data)
+  write(key: string, data: string): void {
+    this.ptys.get(key)?.write(data)
   }
 
-  resize(cols: number, rows: number): void {
-    this.pty?.resize(cols, rows)
+  resize(key: string, cols: number, rows: number): void {
+    this.ptys.get(key)?.resize(cols, rows)
   }
 
-  dispose(): void {
-    if (this.pty) {
-      this.pty.kill()
-      this.pty = null
+  dispose(key?: string): void {
+    if (key) {
+      const pty = this.ptys.get(key)
+      if (pty) {
+        pty.kill()
+        this.ptys.delete(key)
+        this.cwdMap.delete(key)
+      }
+    } else {
+      for (const pty of this.ptys.values()) {
+        pty.kill()
+      }
+      this.ptys.clear()
+      this.cwdMap.clear()
     }
+  }
+
+  getActiveKeys(): string[] {
+    return Array.from(this.ptys.keys())
   }
 }
 
@@ -158,18 +208,16 @@ app.whenReady().then(() => {
   mainWindow = createWindow()
   void loadURL(mainWindow)
 
-  // Initialize session index
-  const dbPath = path.join(app.getPath('userData'), 'pi-desktop.sqlite')
-  sessionIndex = new SessionIndexStore(dbPath)
-
-  // Seed workspaces from existing Pi sessions
-  try {
-    sessionIndex.refreshSessions()
-  } catch {
-    // non-fatal on first run
-  }
-
   registerIpcHandlers()
+
+  // Initialize session index
+  try {
+    const dbPath = path.join(app.getPath('userData'), 'pi-desktop.sqlite')
+    sessionIndex = new SessionIndexStore(dbPath)
+    sessionIndex.refreshSessions()
+  } catch (err) {
+    console.error('Session index init failed (better-sqlite3 may need rebuild):', err)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -268,13 +316,13 @@ function registerIpcHandlers(): void {
       console.error('No workspace found for session:', sessionPath)
       return
     }
-    terminalManager.spawn(workspacePath, sessionPath)
+    terminalManager.spawn(sessionPath, workspacePath, sessionPath)
   })
 
-  ipcMain.handle('new-session', async (_event, cwd?: string) => {
+  ipcMain.handle('new-session', async (_event, key: string, cwd?: string, initialPrompt?: string, model?: string) => {
     const workspacePath = cwd ?? sessionIndex?.getLastWorkspace()
     if (!workspacePath) return
-    terminalManager.spawn(workspacePath)
+    terminalManager.spawn(key, workspacePath, undefined, initialPrompt, model)
   })
 
   ipcMain.handle('rename-session', async (_event, sessionPath: string, newTitle: string) => {
@@ -293,16 +341,20 @@ function registerIpcHandlers(): void {
   })
 
   // ── Terminal ───────────────────────────────────────────────────────────
-  ipcMain.handle('pty-input', async (_event, data: string) => {
-    terminalManager.write(data)
+  ipcMain.handle('pty-input', async (_event, key: string, data: string) => {
+    terminalManager.write(key, data)
   })
 
-  ipcMain.handle('pty-resize', async (_event, cols: number, rows: number) => {
-    terminalManager.resize(cols, rows)
+  ipcMain.handle('pty-resize', async (_event, key: string, cols: number, rows: number) => {
+    terminalManager.resize(key, cols, rows)
   })
 
-  ipcMain.handle('pty-kill', async () => {
-    terminalManager.dispose()
+  ipcMain.handle('pty-kill', async (_event, key?: string) => {
+    terminalManager.dispose(key)
+  })
+
+  ipcMain.handle('get-active-pty-sessions', async () => {
+    return terminalManager.getActiveKeys()
   })
 
   // ── Skills ───────────────────────────────────────────────────────────
@@ -344,14 +396,20 @@ function registerIpcHandlers(): void {
     const res = await fetch(`https://registry.npmjs.org/-/v1/search?text=${q}&size=250`)
     if (!res.ok) throw new Error(`npm registry returned ${res.status}`)
     const data = await res.json()
-    return {
-      packages: data.objects?.map((obj: any) => ({
-        name: obj.package.name,
-        description: obj.package.description,
-        version: obj.package.version,
-        keywords: obj.package.keywords,
-      })) ?? []
+    const rawObjects = Array.isArray(data.objects) ? data.objects : []
+    const packages: Array<{ name: string; description: string; version: string; keywords?: string[] }> = []
+    for (const obj of rawObjects) {
+      const pkg = (obj as { package?: { name?: string; description?: string; version?: string; keywords?: string[] } }).package
+      if (pkg) {
+        packages.push({
+          name: pkg.name ?? '',
+          description: pkg.description ?? '',
+          version: pkg.version ?? '',
+          keywords: pkg.keywords,
+        })
+      }
     }
+    return { packages }
   })
 
   ipcMain.handle('get-installed-extensions', async () => {
@@ -379,6 +437,80 @@ function registerIpcHandlers(): void {
 
     return result
   })
+
+  // ── Models ─────────────────────────────────────────────────────────────
+  ipcMain.handle('get-models', async () => {
+    return getPiModels()
+  })
+
+  ipcMain.handle('get-default-model', async () => {
+    return readPiSettings()
+  })
+
+  ipcMain.handle('set-default-model', async (_event, provider: string, modelId: string) => {
+    const settingsPath = path.join(homedir(), '.pi', 'agent', 'settings.json')
+    try {
+      const raw = readFileSync(settingsPath, 'utf-8')
+      const settings = JSON.parse(raw) as Record<string, unknown>
+      settings.defaultProvider = provider
+      settings.defaultModel = modelId
+      const fs = await import('node:fs/promises')
+      await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+    } catch {
+      // ignore write errors
+    }
+  })
+}
+
+// ─── Pi settings helpers ───────────────────────────────────────────────────
+
+function readPiSettings(): { defaultProvider: string; defaultModel: string; defaultThinkingLevel: string } | null {
+  const settingsPath = path.join(homedir(), '.pi', 'agent', 'settings.json')
+  try {
+    const raw = readFileSync(settingsPath, 'utf-8')
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    return {
+      defaultProvider: typeof parsed.defaultProvider === 'string' ? parsed.defaultProvider : '',
+      defaultModel: typeof parsed.defaultModel === 'string' ? parsed.defaultModel : '',
+      defaultThinkingLevel: typeof parsed.defaultThinkingLevel === 'string' ? parsed.defaultThinkingLevel : 'medium',
+    }
+  } catch {
+    return null
+  }
+}
+
+function getPiModels(): Array<{ provider: string; id: string; name: string; contextWindow: string }> {
+  try {
+    const stdout = execSync(`${PI_BINARY} --list-models`, { encoding: 'utf-8', timeout: 8000, env: process.env })
+    const lines = stdout.trim().split('\n')
+    const models: Array<{ provider: string; id: string; name: string; contextWindow: string }> = []
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim()
+      if (!line) continue
+      const parts = line.split(/\s+/)
+      if (parts.length >= 2) {
+        models.push({
+          provider: parts[0],
+          id: parts[1],
+          name: parts[1].split('/').pop() ?? parts[1],
+          contextWindow: parts[2] ?? '',
+        })
+      }
+    }
+    return models
+  } catch {
+    // If pi --list-models fails, fall back to reading settings.json default
+    const settings = readPiSettings()
+    if (settings?.defaultModel && settings.defaultProvider) {
+      return [{
+        provider: settings.defaultProvider,
+        id: settings.defaultModel,
+        name: settings.defaultModel.split('/').pop() ?? settings.defaultModel,
+        contextWindow: '',
+      }]
+    }
+    return []
+  }
 }
 
 // ─── Extension scanning helpers ────────────────────────────────────────────

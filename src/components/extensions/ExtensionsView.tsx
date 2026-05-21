@@ -46,23 +46,6 @@ export function ExtensionsView() {
   const [installed, setInstalled] = React.useState<InstalledExtension[]>([]);
   const [installedLoading, setInstalledLoading] = React.useState(true);
 
-  // Load installed extensions on mount
-  React.useEffect(() => {
-    loadInstalled();
-  }, []);
-
-  const loadInstalled = async () => {
-    setInstalledLoading(true);
-    try {
-      const list = await window.electron.getInstalledExtensions();
-      setInstalled(list);
-    } catch (err) {
-      console.error("Failed to load installed extensions:", err);
-    } finally {
-      setInstalledLoading(false);
-    }
-  };
-
   const search = React.useCallback(async (q: string) => {
     setLoading(true);
     try {
@@ -76,10 +59,24 @@ export function ExtensionsView() {
     }
   }, []);
 
+  const loadInstalled = React.useCallback(async () => {
+    setInstalledLoading(true);
+    try {
+      const list = await window.electron.getInstalledExtensions();
+      setInstalled(list);
+    } catch (err) {
+      console.error("Failed to load installed extensions:", err);
+    } finally {
+      setInstalledLoading(false);
+    }
+  }, []);
+
   // Initial load
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadInstalled();
     search("pi-extension");
-  }, [search]);
+  }, [loadInstalled, search]);
 
   // Debounced search
   React.useEffect(() => {
@@ -111,7 +108,7 @@ export function ExtensionsView() {
     } finally {
       setInstallingId(null);
     }
-  }, []);
+  }, [loadInstalled]);
 
   const handleCopy = React.useCallback((pkgName: string) => {
     const command = `pi install npm:${pkgName}`;
@@ -133,37 +130,56 @@ export function ExtensionsView() {
           </div>
         </div>
 
-        {/* Installed extensions */}
-        {installed.length > 0 && (
-          <div className="mb-8">
-            <h2 className="text-sm font-medium text-foreground mb-3 flex items-center gap-2">
-              <IconPackage className="h-4 w-4 text-muted-foreground" />
-              Installed ({installed.length})
-            </h2>
-            <div className="flex flex-wrap gap-2">
+        {/* Installed extensions — always shown at top */}
+        <div className="mb-8">
+          <h2 className="text-sm font-medium text-foreground mb-3 flex items-center gap-2">
+            <IconPackage className="h-4 w-4 text-muted-foreground" />
+            Installed {installed.length > 0 && `(${installed.length})`}
+          </h2>
+
+          {installedLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
+              Scanning installed extensions...
+            </div>
+          ) : installed.length === 0 ? (
+            <div className="rounded-lg border border-border/40 bg-card/50 p-6 text-center">
+              <IconPuzzle className="h-6 w-6 text-muted-foreground/40 mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No extensions installed yet</p>
+              <p className="text-xs text-muted-foreground/60 mt-1">
+                Search below to find and install extensions
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {installed.map((ext) => (
                 <div
                   key={ext.name}
-                  className="inline-flex items-center gap-2 rounded-lg border border-border/40 bg-card/50 px-3 py-2"
+                  className="flex flex-col gap-1 rounded-lg border border-border/40 bg-card/50 p-4 hover:border-border/80 hover:bg-card transition-colors"
                 >
-                  <div className="flex flex-col">
-                    <span className="text-sm font-medium">{ext.name}</span>
-                    <span className="text-[10px] text-muted-foreground">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium text-sm text-foreground truncate min-w-0">
+                      {ext.name}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/70 shrink-0">
                       v{ext.version}
                     </span>
                   </div>
+                  {ext.description && (
+                    <p className="text-xs text-muted-foreground line-clamp-2">
+                      {ext.description}
+                    </p>
+                  )}
+                  {ext.installedAt && (
+                    <p className="text-[10px] text-muted-foreground/50 mt-1">
+                      Installed {new Date(ext.installedAt).toLocaleDateString()}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
-          </div>
-        )}
-
-        {installedLoading && installed.length === 0 && (
-          <div className="mb-8 flex items-center gap-2 text-sm text-muted-foreground">
-            <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
-            Scanning installed extensions...
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Search */}
         <div className="relative mb-6">

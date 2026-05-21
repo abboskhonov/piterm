@@ -61,6 +61,7 @@ export function SkillsView({ workspacePath }: SkillsViewProps) {
   }, []);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadInstalled();
   }, [loadInstalled]);
 
@@ -80,6 +81,7 @@ export function SkillsView({ workspacePath }: SkillsViewProps) {
 
   // Initial load for trending
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     searchRemote("trending");
   }, [searchRemote]);
 

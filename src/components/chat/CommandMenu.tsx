@@ -22,7 +22,7 @@ interface CommandMenuProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sessions: SessionListItem[];
-  onSelectSession: (path: string) => void;
+  onSelectSession: (path: string, workspacePath?: string) => void;
 }
 
 export const CommandMenu = React.memo(function CommandMenu({
