@@ -3,8 +3,8 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "description": "Pi Desktop — Electron app built with React, Vite, and shadcn/ui",
-  "author": "Pi Desktop <pi@example.com>",
+  "description": "Piterm — Electron app built with React, Vite, and shadcn/ui",
+  "author": "Piterm <pi@example.com>",
   "main": "out/main/main.js",
   "scripts": {
     "dev": "electron-vite dev -- --ozone-platform=x11 --no-sandbox",

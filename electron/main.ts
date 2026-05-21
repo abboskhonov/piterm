@@ -1,12 +1,16 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs'
+import { readdir, stat, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { spawn, execSync } from 'node:child_process'
+import { spawn, execSync, exec as execCallback } from 'node:child_process'
+import { promisify } from 'node:util'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { spawn as spawnPty } from 'node-pty'
 import { readWindowState, writeWindowState } from './window-state'
 import { SessionIndexStore } from './sessionIndex'
+
+const execAsync = promisify(execCallback)
 
 // ─── Resolve pi binary ─────────────────────────────────────────────────────
 function resolvePiBinary(): string {
@@ -87,8 +91,8 @@ class TerminalManager {
       mainWindow?.webContents.send('pty-exit', key, { exitCode, signal })
       const ptyCwd = this.cwdMap.get(key)
       if (ptyCwd) {
-        sessionIndex?.refreshSessions(ptyCwd)
-        mainWindow?.webContents.send('session-index-updated')
+        sessionIndex?.refreshSessions(ptyCwd).catch(console.error)
+        mainWindow?.webContents.send('session-index-updated', ptyCwd)
       }
       this.ptys.delete(key)
       this.cwdMap.delete(key)
@@ -141,7 +145,7 @@ function createWindow(): BrowserWindow {
     minHeight: 600,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     frame: process.platform === 'darwin',
-    icon: path.join(currentDir, '../../build/icon.png'),
+    icon: path.join(currentDir, app.isPackaged ? '../../build/favicon.svg' : '../build/favicon.svg'),
     webPreferences: {
       preload: path.join(currentDir, '../preload/index.js'),
       contextIsolation: true,
@@ -214,7 +218,9 @@ app.whenReady().then(() => {
   try {
     const dbPath = path.join(app.getPath('userData'), 'pi-desktop.sqlite')
     sessionIndex = new SessionIndexStore(dbPath)
-    sessionIndex.refreshSessions()
+    sessionIndex.refreshSessions().catch((err) => {
+      console.error('Initial session refresh failed:', err)
+    })
   } catch (err) {
     console.error('Session index init failed (better-sqlite3 may need rebuild):', err)
   }
@@ -295,8 +301,8 @@ function registerIpcHandlers(): void {
     const workspacePath = result.filePaths[0]
     try {
       sessionIndex?.upsertWorkspace(workspacePath)
-      sessionIndex?.refreshSessions(workspacePath)
-      mainWindow?.webContents.send('session-index-updated')
+      sessionIndex?.refreshSessions(workspacePath).catch(console.error)
+      mainWindow?.webContents.send('session-index-updated', workspacePath)
     } catch (err) {
       console.error('Failed to add workspace:', err)
       return { cancelled: true }
@@ -306,7 +312,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('remove-workspace', async (_event, workspacePath: string) => {
     sessionIndex?.removeWorkspace(workspacePath)
-    mainWindow?.webContents.send('session-index-updated')
+    mainWindow?.webContents.send('session-index-updated', workspacePath)
   })
 
   // ── Session management ─────────────────────────────────────────────────
@@ -323,21 +329,31 @@ function registerIpcHandlers(): void {
     const workspacePath = cwd ?? sessionIndex?.getLastWorkspace()
     if (!workspacePath) return
     terminalManager.spawn(key, workspacePath, undefined, initialPrompt, model)
+    // pi writes the session file shortly after spawn — refresh sidebar a few times
+    const refresh = () => {
+      sessionIndex?.refreshSessions(workspacePath).catch(console.error)
+      mainWindow?.webContents.send('session-index-updated', workspacePath)
+    }
+    setTimeout(refresh, 400)
+    setTimeout(refresh, 1500)
   })
 
   ipcMain.handle('rename-session', async (_event, sessionPath: string, newTitle: string) => {
     sessionIndex?.renameSession(sessionPath, newTitle)
-    mainWindow?.webContents.send('session-index-updated')
+    const ws = sessionIndex?.getSessionWorkspace(sessionPath)
+    mainWindow?.webContents.send('session-index-updated', ws)
   })
 
   ipcMain.handle('delete-session', async (_event, sessionPath: string) => {
+    const ws = sessionIndex?.getSessionWorkspace(sessionPath)
     sessionIndex?.deleteSession(sessionPath)
-    mainWindow?.webContents.send('session-index-updated')
+    mainWindow?.webContents.send('session-index-updated', ws)
   })
 
   ipcMain.handle('pin-session', async (_event, sessionPath: string, pinned: boolean) => {
     sessionIndex?.pinSession(sessionPath, pinned)
-    mainWindow?.webContents.send('session-index-updated')
+    const ws = sessionIndex?.getSessionWorkspace(sessionPath)
+    mainWindow?.webContents.send('session-index-updated', ws)
   })
 
   // ── Terminal ───────────────────────────────────────────────────────────
@@ -360,14 +376,19 @@ function registerIpcHandlers(): void {
   // ── Skills ───────────────────────────────────────────────────────────
   ipcMain.handle('get-installed-skills', async () => {
     const home = homedir()
-    const agentsSkills = scanSkillsDir(path.join(home, '.agents', 'skills'))
-    const piSkills = scanSkillsDir(path.join(home, '.pi', 'agent', 'skills'))
+    const [agentsSkills, piSkills] = await Promise.all([
+      scanSkillsDir(path.join(home, '.agents', 'skills')),
+      scanSkillsDir(path.join(home, '.pi', 'agent', 'skills')),
+    ])
     return [...agentsSkills, ...piSkills]
   })
 
   ipcMain.handle('search-skills', async (_event, query: string) => {
     const q = encodeURIComponent(query)
-    const res = await fetch(`https://skills.sh/api/search?q=${q}&limit=24`)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    const res = await fetch(`https://skills.sh/api/search?q=${q}&limit=24`, { signal: controller.signal })
+    clearTimeout(timeout)
     if (!res.ok) throw new Error(`skills.sh returned ${res.status}`)
     return await res.json()
   })
@@ -392,20 +413,45 @@ function registerIpcHandlers(): void {
 
   // ── Extensions ─────────────────────────────────────────────────────────
   ipcMain.handle('search-extensions', async (_event, query: string) => {
-    const q = encodeURIComponent(query || 'pi-extension')
-    const res = await fetch(`https://registry.npmjs.org/-/v1/search?text=${q}&size=250`)
+    const raw = query?.trim().toLowerCase()
+    // Search with pi-extension as an anchor term, then post-filter because
+    // npm's text search does OR-style matching, so generic packages that
+    // happen to contain "extension" (e.g. @tiptap/extension-paragraph) leak in.
+    const searchText = raw ? `${raw} pi-extension` : 'pi-extension'
+    const q = encodeURIComponent(searchText)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    const res = await fetch(`https://registry.npmjs.org/-/v1/search?text=${q}&size=250`, { signal: controller.signal })
+    clearTimeout(timeout)
     if (!res.ok) throw new Error(`npm registry returned ${res.status}`)
     const data = await res.json()
     const rawObjects = Array.isArray(data.objects) ? data.objects : []
-    const packages: Array<{ name: string; description: string; version: string; keywords?: string[] }> = []
+    const packages: Array<{ name: string; description: string; version: string; keywords?: string[]; author?: string; date?: string; links?: { npm?: string; repository?: string; homepage?: string; bugs?: string } }> = []
     for (const obj of rawObjects) {
-      const pkg = (obj as { package?: { name?: string; description?: string; version?: string; keywords?: string[] } }).package
-      if (pkg) {
+      const pkg = (obj as {
+        package?: {
+          name?: string
+          description?: string
+          version?: string
+          keywords?: string[]
+          publisher?: { username?: string; email?: string }
+          date?: string
+          links?: { npm?: string; repository?: string; homepage?: string; bugs?: string }
+        }
+      }).package
+      if (!pkg) continue
+      const name = pkg.name ?? ''
+      const keywords = pkg.keywords ?? []
+      const description = pkg.description ?? ''
+      if (isPiRelated({ name, keywords, description }, raw)) {
         packages.push({
-          name: pkg.name ?? '',
-          description: pkg.description ?? '',
+          name,
+          description,
           version: pkg.version ?? '',
-          keywords: pkg.keywords,
+          keywords,
+          author: pkg.publisher?.username,
+          date: pkg.date,
+          links: pkg.links,
         })
       }
     }
@@ -413,7 +459,7 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('get-installed-extensions', async () => {
-    return scanPiExtensions()
+    return await scanPiExtensions()
   })
 
   ipcMain.handle('install-extension', async (_event, packageName: string) => {
@@ -479,9 +525,16 @@ function readPiSettings(): { defaultProvider: string; defaultModel: string; defa
   }
 }
 
-function getPiModels(): Array<{ provider: string; id: string; name: string; contextWindow: string }> {
+let cachedModels: Array<{ provider: string; id: string; name: string; contextWindow: string }> | null = null
+let cachedModelsAt = 0
+const MODEL_CACHE_TTL_MS = 30_000
+
+async function getPiModels(): Promise<Array<{ provider: string; id: string; name: string; contextWindow: string }>> {
+  if (cachedModels && Date.now() - cachedModelsAt < MODEL_CACHE_TTL_MS) {
+    return cachedModels
+  }
   try {
-    const stdout = execSync(`${PI_BINARY} --list-models`, { encoding: 'utf-8', timeout: 8000, env: process.env })
+    const { stdout } = await execAsync(`${PI_BINARY} --list-models`, { encoding: 'utf-8', timeout: 8000, env: process.env })
     const lines = stdout.trim().split('\n')
     const models: Array<{ provider: string; id: string; name: string; contextWindow: string }> = []
     for (let i = 1; i < lines.length; i++) {
@@ -497,20 +550,79 @@ function getPiModels(): Array<{ provider: string; id: string; name: string; cont
         })
       }
     }
+    cachedModels = models
+    cachedModelsAt = Date.now()
     return models
   } catch {
     // If pi --list-models fails, fall back to reading settings.json default
     const settings = readPiSettings()
     if (settings?.defaultModel && settings.defaultProvider) {
-      return [{
+      cachedModels = [{
         provider: settings.defaultProvider,
         id: settings.defaultModel,
         name: settings.defaultModel.split('/').pop() ?? settings.defaultModel,
         contextWindow: '',
       }]
+      cachedModelsAt = Date.now()
+      return cachedModels
     }
     return []
   }
+}
+
+// ─── Extension helpers ─────────────────────────────────────────────────────
+
+const NON_PI_SCOPES = new Set([
+  '@tiptap', '@types', '@tanstack', '@testing-library', '@storybook',
+  '@babel', '@rollup', '@webpack', '@vitejs', '@vue', '@angular',
+  '@react-native', '@emotion', '@mui', '@mantine', '@radix-ui',
+  '@ark-ui', '@chakra-ui', '@nextui', '@ant-design', '@aws-sdk',
+  '@azure', '@google-cloud', '@firebase', '@prisma', '@trpc',
+  '@apollo', '@urql', '@graphql-tools', '@octokit', '@actions',
+  '@semantic-release', '@commitlint', '@eslint', '@typescript-eslint',
+])
+
+function isPiRelated(pkg: { name: string; keywords?: string[]; description?: string }, userQuery?: string): boolean {
+  const name = pkg.name.toLowerCase()
+  const keywords = (pkg.keywords ?? []).map((k) => k.toLowerCase())
+  const desc = (pkg.description ?? '').toLowerCase()
+  const query = userQuery?.trim() ?? ''
+
+  // Hard-block known non-pi scopes
+  if (name.startsWith('@')) {
+    const scope = name.split('/')[0]
+    if (NON_PI_SCOPES.has(scope)) return false
+  }
+
+  // 1. Keyword signals (strongest)
+  if (keywords.includes('pi-extension')) return true
+  if (keywords.includes('pi-skill')) return true
+  if (keywords.includes('pi')) return true
+
+  // 2. Name signals: "pi" as a standalone prefix/segment
+  if (name.startsWith('pi-')) return true
+  if (name.includes('-pi-')) return true
+  if (name.endsWith('-pi')) return true
+  if (name.startsWith('@') && name.includes('/pi-')) return true
+  // Scoped packages where the scope itself is pi-related
+  if (name.startsWith('@pi/')) return true
+  if (name.startsWith('@pi-')) return true
+
+  // 3. Description signals
+  if (desc.includes('pi extension')) return true
+  if (desc.includes('pi skill')) return true
+  if (desc.includes('for pi')) return true
+
+  // 4. Exact / strong name match with user query
+  if (query.length > 2) {
+    const cleanName = name.replace(/^@[^/]+\//, '') // strip scope
+    if (cleanName === query) return true
+    if (cleanName.startsWith(query + '-')) return true
+    if (cleanName.includes('-' + query + '-')) return true
+    if (cleanName.endsWith('-' + query)) return true
+  }
+
+  return false
 }
 
 // ─── Extension scanning helpers ────────────────────────────────────────────
@@ -522,25 +634,25 @@ interface PiExtension {
   installedAt?: string
 }
 
-function scanPiExtensions(): PiExtension[] {
+async function scanPiExtensions(): Promise<PiExtension[]> {
   const extensions: PiExtension[] = []
   const home = homedir()
 
   // Scan ~/.pi/extensions/ if it exists
   const piExtDir = path.join(home, '.pi', 'extensions')
   try {
-    const entries = readdirSync(piExtDir)
+    const entries = await readdir(piExtDir)
     for (const entry of entries) {
       const entryPath = path.join(piExtDir, entry)
-      const stat = statSync(entryPath)
-      if (stat.isDirectory()) {
+      const s = await stat(entryPath)
+      if (s.isDirectory()) {
         try {
-          const pkgJson = JSON.parse(readFileSync(path.join(entryPath, 'package.json'), 'utf-8'))
+          const pkgJson = JSON.parse(await readFile(path.join(entryPath, 'package.json'), 'utf-8'))
           extensions.push({
             name: pkgJson.name ?? entry,
             version: pkgJson.version ?? 'unknown',
             description: pkgJson.description,
-            installedAt: stat.mtime.toISOString(),
+            installedAt: s.mtime.toISOString(),
           })
         } catch {
           extensions.push({ name: entry, version: 'unknown' })
@@ -554,14 +666,14 @@ function scanPiExtensions(): PiExtension[] {
   // Scan ~/.pi/node_modules/ for pi-extension keyword packages
   const piNodeModules = path.join(home, '.pi', 'node_modules')
   try {
-    const entries = readdirSync(piNodeModules)
+    const entries = await readdir(piNodeModules)
     for (const entry of entries) {
       if (entry.startsWith('.')) continue
       const entryPath = path.join(piNodeModules, entry)
-      const stat = statSync(entryPath)
-      if (stat.isDirectory()) {
+      const s = await stat(entryPath)
+      if (s.isDirectory()) {
         try {
-          const pkgJson = JSON.parse(readFileSync(path.join(entryPath, 'package.json'), 'utf-8'))
+          const pkgJson = JSON.parse(await readFile(path.join(entryPath, 'package.json'), 'utf-8'))
           const keywords = pkgJson.keywords ?? []
           if (keywords.includes('pi-extension')) {
             // Skip duplicates
@@ -570,7 +682,7 @@ function scanPiExtensions(): PiExtension[] {
                 name: pkgJson.name ?? entry,
                 version: pkgJson.version ?? 'unknown',
                 description: pkgJson.description,
-                installedAt: stat.mtime.toISOString(),
+                installedAt: s.mtime.toISOString(),
               })
             }
           }
@@ -585,8 +697,8 @@ function scanPiExtensions(): PiExtension[] {
 
   // Try `pi list` command if available
   try {
-    const result = execSync('pi list --json', { encoding: 'utf-8', timeout: 5000, env: process.env })
-    const list = JSON.parse(result)
+    const { stdout } = await execAsync('pi list --json', { encoding: 'utf-8', timeout: 5000, env: process.env })
+    const list = JSON.parse(stdout)
     if (Array.isArray(list)) {
       for (const item of list) {
         if (typeof item.name === 'string' && !extensions.find((e) => e.name === item.name)) {
@@ -619,17 +731,17 @@ function parseSkillMd(content: string): { name: string; description: string } {
   }
 }
 
-function scanSkillsDir(dir: string): Array<{ name: string; description: string; path: string; source: string }> {
+async function scanSkillsDir(dir: string): Promise<Array<{ name: string; description: string; path: string; source: string }>> {
   const skills: Array<{ name: string; description: string; path: string; source: string }> = []
   try {
-    const entries = readdirSync(dir)
+    const entries = await readdir(dir)
     for (const entry of entries) {
       const entryPath = path.join(dir, entry)
-      const stat = statSync(entryPath)
-      if (stat.isDirectory()) {
+      const s = await stat(entryPath)
+      if (s.isDirectory()) {
         const skillMdPath = path.join(entryPath, 'SKILL.md')
         try {
-          const content = readFileSync(skillMdPath, 'utf-8')
+          const content = await readFile(skillMdPath, 'utf-8')
           const { name, description } = parseSkillMd(content)
           skills.push({
             name: name || entry,

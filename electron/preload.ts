@@ -72,7 +72,7 @@ const api: ElectronAPI = {
 
   // Events
   onSessionIndexUpdated: (callback) => {
-    const handler = () => callback()
+    const handler = (_event: unknown, workspacePath?: string) => callback(workspacePath)
     ipcRenderer.on('session-index-updated', handler)
     return () => {
       ipcRenderer.removeListener('session-index-updated', handler)

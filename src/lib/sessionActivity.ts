@@ -117,6 +117,9 @@ export function useSessionActivity(sessionPath: string): SessionActivity {
     listeners.set(sessionPath, set);
     return () => {
       set.delete(update);
+      if (set.size === 0) {
+        listeners.delete(sessionPath);
+      }
     };
   }, [sessionPath]);
 

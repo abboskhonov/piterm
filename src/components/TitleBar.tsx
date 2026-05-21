@@ -25,7 +25,7 @@ export function TitleBar() {
       {/* Center title */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <span className="text-xs font-medium text-sidebar-foreground/80">
-          Pi Desktop
+          Piterm
         </span>
       </div>
 

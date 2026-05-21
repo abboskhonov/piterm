@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createInterface } from 'node:readline'
 import Database from 'better-sqlite3'
 
 export interface WorkspaceInfo {
@@ -48,7 +49,7 @@ export class SessionIndexStore {
 
   close(): void {
     try {
-      this.db.pragma('wal_checkpoint(TRUNCATE)')
+      this.db.pragma('wal_checkpoint(PASSIVE)')
     } catch { /* non-fatal */ }
     this.db.close()
   }
@@ -104,8 +105,8 @@ export class SessionIndexStore {
     }))
   }
 
-  refreshSessions(workspacePath?: string): SessionListItem[] {
-    const infos = listSessionInfos(workspacePath)
+  async refreshSessions(workspacePath?: string): Promise<SessionListItem[]> {
+    const infos = await listSessionInfos(workspacePath)
     const seen = new Set<string>()
 
     const tx = this.db.transaction((sessions: SessionInfo[]) => {
@@ -334,7 +335,7 @@ export class SessionIndexStore {
 
 // ─── Session file scanning ───────────────────────────────────────────────────
 
-function listSessionInfos(workspacePath?: string): SessionInfo[] {
+async function listSessionInfos(workspacePath?: string): Promise<SessionInfo[]> {
   const sessionsRoot = path.join(os.homedir(), '.pi', 'agent', 'sessions')
   if (!fs.existsSync(sessionsRoot)) return []
 
@@ -356,7 +357,7 @@ function listSessionInfos(workspacePath?: string): SessionInfo[] {
     }
 
     for (const file of files) {
-      const info = buildSessionInfo(path.join(dir, file), workspacePath)
+      const info = await buildSessionInfo(path.join(dir, file), workspacePath)
       if (info) infos.push(info)
     }
   }
@@ -369,7 +370,7 @@ function getDefaultSessionDir(cwd: string): string {
   return path.join(os.homedir(), '.pi', 'agent', 'sessions', safePath)
 }
 
-function buildSessionInfo(filePath: string, expectedWorkspacePath?: string): SessionInfo | null {
+async function buildSessionInfo(filePath: string, expectedWorkspacePath?: string): Promise<SessionInfo | null> {
   try {
     const stats = fs.statSync(filePath)
     const firstLine = readFirstLine(filePath)
@@ -383,7 +384,7 @@ function buildSessionInfo(filePath: string, expectedWorkspacePath?: string): Ses
     const cwd = typeof header.cwd === 'string' ? canonicalizePath(header.cwd) : ''
     if (expectedWorkspacePath && cwd !== expectedWorkspacePath) return null
 
-    const { messageCount, firstMessage, name } = quickScanSession(filePath)
+    const { messageCount, firstMessage, name } = await quickScanSession(filePath)
     const timestamp = typeof header.timestamp === 'string' ? header.timestamp : undefined
 
     return {
@@ -412,20 +413,23 @@ function readFirstLine(filePath: string): string | null {
   }
 }
 
-function quickScanSession(filePath: string): {
+async function quickScanSession(filePath: string, maxLines = 500): Promise<{
   messageCount: number
   firstMessage: string
   name: string | null
-} {
+}> {
   let messageCount = 0
   let firstMessage = ''
   let name: string | null = null
+  let lineCount = 0
 
   try {
-    const content = fs.readFileSync(filePath, 'utf8')
-    const lines = content.trim().split('\n')
+    const stream = fs.createReadStream(filePath, { encoding: 'utf8', highWaterMark: 64 * 1024 })
+    const rl = createInterface({ input: stream, crlfDelay: Infinity })
 
-    for (const line of lines) {
+    for await (const line of rl) {
+      lineCount++
+      if (lineCount > maxLines && firstMessage && name) break
       if (!line.trim()) continue
       try {
         const entry = JSON.parse(line) as unknown
@@ -448,6 +452,7 @@ function quickScanSession(filePath: string): {
       } catch {
         // skip malformed line
       }
+      if (lineCount > maxLines) break
     }
   } catch {
     // file read error

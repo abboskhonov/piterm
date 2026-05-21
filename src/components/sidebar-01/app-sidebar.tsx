@@ -6,7 +6,11 @@ import {
 } from "@/components/ui/sidebar";
 import { NavHeader } from "@/components/sidebar-01/nav-header";
 import { NavSessions } from "@/components/sidebar-01/nav-sessions";
-import { IconSettings } from "@tabler/icons-react";
+import {
+  IconSettings,
+  IconLayoutSidebar,
+  IconLayoutSidebarRightCollapse,
+} from "@tabler/icons-react";
 import { useSidebar } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
@@ -36,6 +40,8 @@ export function AppSidebar({
   onNavigate,
   ...props
 }: AppSidebarProps) {
+  const { state, toggleSidebar } = useSidebar();
+  const isCollapsed = state === "collapsed";
   const [workspaces, setWorkspaces] = React.useState<WorkspaceInfo[]>([]);
   const [workspaceSessions, setWorkspaceSessions] = React.useState<Record<string, SessionListItem[]>>({});
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
@@ -62,10 +68,11 @@ export function AppSidebar({
 
   // Refresh on session index updates
   React.useEffect(() => {
-    const unsubscribe = window.electron.onSessionIndexUpdated(() => {
+    const unsubscribe = window.electron.onSessionIndexUpdated((changedWorkspace) => {
       window.electron.getWorkspaces().then((list) => {
         setWorkspaces(list);
-        for (const path of expanded) {
+        const targets = changedWorkspace ? [changedWorkspace] : Array.from(expanded);
+        for (const path of targets) {
           window.electron.getSessions(path).then((sessions) => {
             setWorkspaceSessions((prev) => ({ ...prev, [path]: sessions }));
           });
@@ -124,6 +131,42 @@ export function AppSidebar({
   return (
     <Sidebar {...props} collapsible="icon" className="border-r border-border/40">
       <SidebarContent className="flex flex-col gap-0 overflow-hidden pt-10">
+        {/* App header */}
+        {isCollapsed ? (
+          /* Collapsed: centered logo that swaps to expand icon on hover */
+          <div className="flex items-center justify-center px-3 py-2 group">
+            <button
+              onClick={() => toggleSidebar()}
+              className="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-accent"
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+            >
+              <img
+                src="./favicon.svg"
+                alt="Pi"
+                className="h-6 w-6 shrink-0 group-hover:hidden"
+                draggable={false}
+              />
+              <IconLayoutSidebarRightCollapse className="h-4 w-4 hidden group-hover:block" />
+            </button>
+          </div>
+        ) : (
+          /* Expanded: icon + Pi + collapse button */
+          <div className="flex items-center justify-between px-3 py-2">
+            <div className="flex items-center gap-2">
+              <img src="./favicon.svg" alt="Pi" className="h-6 w-6 shrink-0" draggable={false} />
+              <span className="text-sm font-semibold">Pi</span>
+            </div>
+            <button
+              onClick={() => toggleSidebar()}
+              className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+            >
+              <IconLayoutSidebar className="h-4 w-4" />
+            </button>
+          </div>
+        )}
         <NavHeader
           activeView={activeView}
           allSessions={allSessions}

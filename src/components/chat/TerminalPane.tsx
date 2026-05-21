@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { IconChevronRight } from "@tabler/icons-react";
@@ -9,24 +9,28 @@ interface TerminalPaneProps {
   ptyKey: string;
   sessionPath: string | null;
   workspacePath: string | null;
+  isVisible?: boolean;
   initialPrompt?: string;
   model?: string;
   onPtyExit?: (key: string) => void;
 }
 
-export function TerminalPane({ ptyKey, sessionPath, workspacePath, initialPrompt, model, onPtyExit }: TerminalPaneProps) {
+export function TerminalPane({ ptyKey, sessionPath, workspacePath, isVisible, initialPrompt, model, onPtyExit }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastOpenedRef = useRef<string | null>(null);
   const onPtyExitRef = useRef(onPtyExit);
+  const isVisibleRef = useRef(isVisible);
   useEffect(() => {
     onPtyExitRef.current = onPtyExit;
   });
+  useEffect(() => {
+    isVisibleRef.current = isVisible;
+  }, [isVisible]);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ptyExited, setPtyExited] = useState(false);
-  const [workspaceName, setWorkspaceName] = useState<string>("");
   const [sessionTitle, setSessionTitle] = useState<string>("");
 
   // Initialize xterm once
@@ -82,6 +86,7 @@ export function TerminalPane({ ptyKey, sessionPath, workspacePath, initialPrompt
 
     // Receive PTY data
     const unsubData = window.electron.onPtyData(ptyKey, (data) => {
+      if (!isVisibleRef.current) return;
       terminal.write(data);
     });
 
@@ -100,18 +105,23 @@ export function TerminalPane({ ptyKey, sessionPath, workspacePath, initialPrompt
     });
 
     // Observe resize
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const resizeObserver = new ResizeObserver((entries) => {
+      if (!isVisibleRef.current) return;
       const entry = entries[0];
       if (!entry || entry.contentRect.width === 0 || entry.contentRect.height === 0) return;
-      try {
-        fitAddon.fit();
-        const { cols, rows } = terminal;
-        if (cols > 0 && rows > 0) {
-          window.electron.ptyResize(ptyKey, cols, rows).catch(console.error);
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        try {
+          fitAddon.fit();
+          const { cols, rows } = terminal;
+          if (cols > 0 && rows > 0) {
+            window.electron.ptyResize(ptyKey, cols, rows).catch(console.error);
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
-      }
+      }, 150);
     });
     resizeObserver.observe(containerRef.current);
 
@@ -120,6 +130,7 @@ export function TerminalPane({ ptyKey, sessionPath, workspacePath, initialPrompt
 
     return () => {
       clearTimeout(fitTimer);
+      if (resizeTimer) clearTimeout(resizeTimer);
       unsubData();
       unsubExit();
       resizeObserver.disconnect();
@@ -130,19 +141,17 @@ export function TerminalPane({ ptyKey, sessionPath, workspacePath, initialPrompt
     };
   }, [ptyKey]);
 
-  // Resolve workspace name + session title when deps change
+  const workspaceName = useMemo(() => {
+    if (!workspacePath) return "";
+    return workspacePath.split(/[\\/]/).pop() || "Project";
+  }, [workspacePath]);
+
+  // Resolve session title when deps change
   useEffect(() => {
     if (!workspacePath) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setWorkspaceName("");
       setSessionTitle("");
       return;
     }
-
-    window.electron.getWorkspaces().then((workspaces: WorkspaceInfo[]) => {
-      const ws = workspaces.find((w) => w.path === workspacePath);
-      if (ws) setWorkspaceName(ws.displayName);
-    });
 
     window.electron.getSessions(workspacePath).then((sessions: SessionListItem[]) => {
       if (sessionPath) {
@@ -177,6 +186,23 @@ export function TerminalPane({ ptyKey, sessionPath, workspacePath, initialPrompt
       });
     }
   }, [ptyKey, sessionPath, workspacePath, initialPrompt, model]);
+
+  // When this pane becomes visible again (tab switch), refresh xterm to repaint
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!terminal || !fitAddon || !isVisible) return;
+    // Small delay to let the DOM settle after display:none → visible transition
+    const timer = setTimeout(() => {
+      try {
+        fitAddon.fit();
+        terminal.refresh(0, terminal.rows - 1);
+      } catch {
+        // ignore
+      }
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [isVisible]);
 
   // initialPrompt is passed as a CLI arg to pi via newSession above.
   // No need to type it into the PTY — pi receives it directly on spawn.

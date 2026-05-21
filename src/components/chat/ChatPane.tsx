@@ -48,6 +48,7 @@ export function ChatPane({
             ptyKey={pty.key}
             sessionPath={pty.sessionPath}
             workspacePath={pty.workspacePath}
+            isVisible={pty.key === visiblePtyKey}
             initialPrompt={pty.key === visiblePtyKey ? initialPrompt : undefined}
             model={pty.model}
             onPtyExit={onPtyExit}

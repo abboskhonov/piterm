@@ -1,23 +1,30 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
   "appId": "com.example.pi-desktop",
-  "productName": "Pi Desktop",
+  "productName": "Piterm",
   "asar": true,
   "asarUnpack": [
-    "node_modules/**"
+    "node_modules/better-sqlite3/**/*",
+    "node_modules/node-pty/**/*"
   ],
   "directories": {
     "output": "release/${version}",
     "buildResources": "build"
   },
   "files": ["out", "build"],
+  "extraResources": [
+    "build/favicon.svg"
+  ],
   "mac": {
     "category": "public.app-category.utilities",
     "target": ["dmg"]
   },
   "linux": {
     "category": "Utility",
-    "target": ["AppImage", "rpm"]
+    "target": ["AppImage", "rpm"],
+    "desktop": {
+      "Icon": "/usr/lib/pi-desktop/resources/favicon.svg"
+    }
   },
   "win": {
     "target": ["nsis"]

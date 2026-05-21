@@ -86,7 +86,7 @@ export interface ElectronAPI {
   installSkill(spec: string, global: boolean, cwd?: string): Promise<{ success: boolean; stdout: string; stderr: string }>
 
   // Extensions
-  searchExtensions(query: string): Promise<{ packages: Array<{ name: string; description: string; version: string; keywords?: string[] }> }>
+  searchExtensions(query: string): Promise<{ packages: Array<{ name: string; description: string; version: string; keywords?: string[]; author?: string; date?: string; links?: { npm?: string; repository?: string; homepage?: string; bugs?: string } }> }>
   installExtension(packageName: string): Promise<{ success: boolean; stdout: string; stderr: string }>
   getInstalledExtensions(): Promise<Array<{ name: string; version: string; description?: string; installedAt?: string }>>
 
@@ -98,7 +98,7 @@ export interface ElectronAPI {
   onWindowMaximized(callback: (isMaximized: boolean) => void): () => void
 
   // Events
-  onSessionIndexUpdated(callback: () => void): () => void
+  onSessionIndexUpdated(callback: (workspacePath?: string) => void): () => void
   onPtyData(sessionKey: string, callback: (data: string) => void): () => void
   onPtyExit(sessionKey: string, callback: (code: number | null, signal: number | null) => void): () => void
 }
