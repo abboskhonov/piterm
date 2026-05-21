@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.example.pi-desktop",
+  "productName": "Pi Desktop",
+  "asar": true,
+  "asarUnpack": [
+    "node_modules/**"
+  ],
+  "directories": {
+    "output": "release/${version}",
+    "buildResources": "build"
+  },
+  "files": ["out", "build"],
+  "mac": {
+    "category": "public.app-category.utilities",
+    "target": ["dmg"]
+  },
+  "linux": {
+    "category": "Utility",
+    "target": ["AppImage", "rpm"]
+  },
+  "win": {
+    "target": ["nsis"]
+  }
+}
