@@ -40,11 +40,11 @@ export function SettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-w-[1400px] min-w-[1100px] w-[95vw] p-0 gap-0 overflow-hidden rounded-xl"
+        className="max-w-xl w-[90vw] p-0 gap-0 overflow-hidden rounded-xl"
         showCloseButton={false}
       >
         <DialogTitle className="sr-only">Settings</DialogTitle>
-        <div className="flex h-[680px]">
+        <div className="flex max-h-[80vh]">
           {/* Left sidebar */}
           <div className="w-[200px] shrink-0 border-r border-border/40 bg-muted/30 flex flex-col">
             <div className="flex items-center justify-between px-3 py-3">

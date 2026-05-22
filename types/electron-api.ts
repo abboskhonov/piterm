@@ -51,6 +51,8 @@ export interface AddWorkspaceResult {
 export interface ElectronAPI {
   getAppInfo(): Promise<AppInfo>
   openExternal(url: string): Promise<void>
+  openPath(filePath: string): Promise<void>
+  getPathForFile(file: File): string
   platform: string
   versions: {
     node: string

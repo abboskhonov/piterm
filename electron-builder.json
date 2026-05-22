@@ -12,19 +12,13 @@
     "buildResources": "build"
   },
   "files": ["out", "build"],
-  "extraResources": [
-    "build/favicon.svg"
-  ],
   "mac": {
     "category": "public.app-category.utilities",
     "target": ["dmg"]
   },
   "linux": {
     "category": "Utility",
-    "target": ["AppImage", "rpm"],
-    "desktop": {
-      "Icon": "/usr/lib/pi-desktop/resources/favicon.svg"
-    }
+    "target": ["AppImage", "rpm"]
   },
   "win": {
     "target": ["nsis"]

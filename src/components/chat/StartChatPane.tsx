@@ -24,6 +24,8 @@ export function StartChatPane({ defaultWorkspacePath, defaultModel, onStart }: S
   const [prompt, setPrompt] = React.useState("");
   const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = React.useState(false);
   const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false);
+  const workspaceDropdownRef = React.useRef<HTMLDivElement>(null);
+  const modelDropdownRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const hasLoadedRef = React.useRef(false);
 
@@ -50,6 +52,32 @@ export function StartChatPane({ defaultWorkspacePath, defaultModel, onStart }: S
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Close dropdowns on click outside
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (workspaceDropdownOpen && workspaceDropdownRef.current && !workspaceDropdownRef.current.contains(e.target as Node)) {
+        setWorkspaceDropdownOpen(false);
+      }
+      if (modelDropdownOpen && modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
+        setModelDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [workspaceDropdownOpen, modelDropdownOpen]);
+
+  // Close dropdowns on Escape
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setWorkspaceDropdownOpen(false);
+        setModelDropdownOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   // Sync props when they change
@@ -98,7 +126,7 @@ export function StartChatPane({ defaultWorkspacePath, defaultModel, onStart }: S
         {/* Top toolbar — project selector outside the card */}
         <div className="w-full flex items-center gap-2">
           {/* Project pill */}
-          <div className="relative">
+          <div className="relative" ref={workspaceDropdownRef}>
             <button
               onClick={() => {
                 setWorkspaceDropdownOpen((o) => !o);
@@ -160,7 +188,7 @@ export function StartChatPane({ defaultWorkspacePath, defaultModel, onStart }: S
           {/* Bottom toolbar */}
           <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between gap-2">
             {/* Left: model pill */}
-            <div className="relative">
+            <div className="relative" ref={modelDropdownRef}>
                 <button
                   onClick={() => {
                     setModelDropdownOpen((o) => !o);

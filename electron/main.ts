@@ -145,7 +145,7 @@ function createWindow(): BrowserWindow {
     minHeight: 600,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     frame: process.platform === 'darwin',
-    icon: path.join(currentDir, app.isPackaged ? '../../build/favicon.svg' : '../build/favicon.svg'),
+    icon: path.join(currentDir, '../../build/favicon.svg'),
     webPreferences: {
       preload: path.join(currentDir, '../preload/index.js'),
       contextIsolation: true,
@@ -256,6 +256,11 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('open-external', async (_event, url: string) => {
     await shell.openExternal(url)
+  })
+
+  ipcMain.handle('open-path', async (_event, filePath: string) => {
+    const error = await shell.openPath(filePath)
+    if (error) throw new Error(error)
   })
 
   // ── Window controls ────────────────────────────────────────────────────

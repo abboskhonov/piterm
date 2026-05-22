@@ -154,8 +154,16 @@ export function ExtensionsView() {
     } else if (typeFilter === "package") {
       list = list.filter((p) => !isExtension(p));
     }
+    // Apply sorting
+    if (sortBy === "downloads") {
+      list.sort((a, b) => ((b as unknown as { downloads?: number }).downloads ?? 0) - ((a as unknown as { downloads?: number }).downloads ?? 0));
+    } else if (sortBy === "recent") {
+      list.sort((a, b) => new Date(b.date ?? 0).getTime() - new Date(a.date ?? 0).getTime());
+    } else if (sortBy === "name") {
+      list.sort((a, b) => a.name.localeCompare(b.name));
+    }
     return list;
-  }, [packages, typeFilter]);
+  }, [packages, typeFilter, sortBy]);
 
   const handleReset = () => {
     setQuery("");

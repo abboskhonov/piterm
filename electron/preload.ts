@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   ElectronAPI,
 } from '../types/electron-api'
@@ -18,6 +18,8 @@ ipcRenderer.on('pty-exit', (_event, key: string, payload: { exitCode: number | n
 const api: ElectronAPI = {
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   platform: process.platform,
   versions: {
     node: process.versions.node,

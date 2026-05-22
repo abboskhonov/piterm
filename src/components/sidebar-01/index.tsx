@@ -5,6 +5,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { IconX } from "@tabler/icons-react";
 import { AppSidebar } from "@/components/sidebar-01/app-sidebar";
 import { ChatPane } from "@/components/chat/ChatPane";
 import { SkillsView } from "@/components/skills/SkillsView";
@@ -94,6 +95,11 @@ export default function Sidebar01() {
     }
   };
 
+  const handleCloseTab = (key: string) => {
+    window.electron.ptyKill(key).catch(() => {});
+    handlePtyExit(key);
+  };
+
   // Ctrl+Tab / Ctrl+Shift+Tab to cycle active terminal tabs
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -144,6 +150,52 @@ export default function Sidebar01() {
             </button>
           )}
         </div>
+        {/* Active session tabs */}
+        {activeView === 'chat' && activePtys.length > 0 && (
+          <div className="flex shrink-0 items-center gap-0.5 border-b border-border/40 bg-muted/20 px-2 h-9 overflow-x-auto no-scrollbar">
+            {activePtys.map((pty) => {
+              const isActive = pty.key === visiblePtyKey;
+              const name = pty.workspacePath.split(/[\\/]/).pop() || "Project";
+              return (
+                <button
+                  key={pty.key}
+                  onClick={() => {
+                    setVisiblePtyKey(pty.key);
+                    setActiveSessionPath(pty.sessionPath);
+                    setActiveView('chat');
+                  }}
+                  className={cn(
+                    "group flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors border",
+                    isActive
+                      ? "bg-accent text-accent-foreground border-border/30"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent/40 border-transparent"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "inline-block h-1.5 w-1.5 rounded-full shrink-0",
+                      isActive ? "bg-primary" : "bg-muted-foreground/30"
+                    )}
+                  />
+                  <span className="truncate max-w-[140px]">{name}</span>
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleCloseTab(pty.key);
+                    }}
+                    className={cn(
+                      "flex h-4 w-4 items-center justify-center rounded-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-accent-foreground/10",
+                      isActive && "opacity-100"
+                    )}
+                    title="Close session"
+                  >
+                    <IconX className="h-3 w-3" />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="flex-1 overflow-hidden">
           {activeView === 'chat' ? (
             <ChatPane

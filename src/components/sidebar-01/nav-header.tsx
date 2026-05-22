@@ -10,7 +10,7 @@ import { CommandMenu } from "@/components/chat/CommandMenu";
 import type { SessionListItem } from "../../../types/electron-api";
 
 const navItems = [
-  { id: "new-session", title: "New Conversation", icon: IconPlus, active: true },
+  { id: "new-session", title: "New Conversation", icon: IconPlus },
   { id: "search", title: "Conversation History", icon: IconSearch },
   { id: "extensions", title: "Extensions", icon: IconPuzzle },
 ];
