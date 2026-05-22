@@ -185,15 +185,59 @@ export function TerminalPane({
         }
         return true; // xterm handles Ctrl+C (SIGINT)
       }
-      // Cmd/Ctrl+V or Ctrl+Shift+V: paste
+      // Paste — Ctrl+V / Cmd+V / Ctrl+Shift+V
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") {
         e.preventDefault();
-        navigator.clipboard
-          .readText()
-          .then((text) => {
-            window.electron.ptyInput(ptyKey, text).catch(console.error);
-          })
-          .catch(() => {});
+        void (async () => {
+          try {
+            // Try modern Clipboard API first (supports images)
+            if (navigator.clipboard.read) {
+              const items = await navigator.clipboard.read();
+              for (const item of items) {
+                // Prefer image/png if available
+                if (item.types.includes("image/png")) {
+                  const blob = await item.getType("image/png");
+                  const base64 = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                  });
+                  window.electron.ptyInput(ptyKey, base64);
+                  terminal.focus();
+                  return;
+                }
+                // Also handle any image/* type
+                const imgType = item.types.find((t) =>
+                  t.startsWith("image/")
+                );
+                if (imgType) {
+                  const blob = await item.getType(imgType);
+                  const base64 = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                  });
+                  window.electron.ptyInput(ptyKey, base64);
+                  terminal.focus();
+                  return;
+                }
+              }
+            }
+            // No images found — fall back to plain text
+            const text = await navigator.clipboard.readText();
+            window.electron.ptyInput(ptyKey, text);
+            terminal.focus();
+          } catch {
+            // Clipboard API denied or unavailable — try readText only
+            try {
+              const text = await navigator.clipboard.readText();
+              window.electron.ptyInput(ptyKey, text);
+              terminal.focus();
+            } catch { /* ignore */ }
+          }
+        })();
         return false;
       }
       // Ctrl+F / Cmd+F: open find
@@ -202,13 +246,16 @@ export function TerminalPane({
         setSearchOpen(true);
         return false;
       }
-      // Ctrl+Backspace: delete word backward (send Ctrl+W)
+      // Ctrl+Backspace: delete word backward (ESC DEL)
+      // Sends \x1b\x7f which is M-DEL — bound to backward-delete-word in
+      // modern readline/zle/fish. Safer than ^W (backward-kill-word) which
+      // can wipe the entire line up to the last whitespace.
       if (e.key === "Backspace" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault();
-        window.electron.ptyInput(ptyKey, "\x17").catch(console.error);
+        window.electron.ptyInput(ptyKey, "\x1b\x7f").catch(console.error);
         return false;
       }
-      // Alt+Backspace: delete word backward (send ESC DEL)
+      // Alt+Backspace: delete word backward (same ESC DEL sequence)
       if (e.key === "Backspace" && e.altKey && !e.shiftKey) {
         e.preventDefault();
         window.electron.ptyInput(ptyKey, "\x1b\x7f").catch(console.error);
