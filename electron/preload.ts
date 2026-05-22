@@ -59,6 +59,9 @@ const api: ElectronAPI = {
   installExtension: (packageName) => ipcRenderer.invoke('install-extension', packageName),
   getInstalledExtensions: () => ipcRenderer.invoke('get-installed-extensions'),
 
+  // Git
+  getGitDiff: (cwd) => ipcRenderer.invoke('get-git-diff', cwd),
+
   // Window controls
   windowMinimize: () => ipcRenderer.invoke('window-minimize'),
   windowMaximize: () => ipcRenderer.invoke('window-maximize'),

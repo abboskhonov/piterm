@@ -100,6 +100,9 @@ export interface ElectronAPI {
   onWindowMaximized(callback: (isMaximized: boolean) => void): () => void
 
   // Events
+  // Git
+  getGitDiff(cwd: string): Promise<{ added: number; deleted: number; branch?: string } | null>
+
   onSessionIndexUpdated(callback: (workspacePath?: string) => void): () => void
   onPtyData(sessionKey: string, callback: (data: string) => void): () => void
   onPtyExit(sessionKey: string, callback: (code: number | null, signal: number | null) => void): () => void

@@ -489,6 +489,29 @@ function registerIpcHandlers(): void {
     return result
   })
 
+  // ── Git ──────────────────────────────────────────────────────────────
+  ipcMain.handle('get-git-diff', async (_event, cwd: string) => {
+    try {
+      const { stdout: statOut } = await execAsync('git diff --numstat', { encoding: 'utf-8', timeout: 3000, cwd, env: process.env })
+      let added = 0, deleted = 0
+      for (const line of statOut.trim().split('\n')) {
+        const m = line.match(/^(\d+)\s+(\d+)\s/)
+        if (m) {
+          added += parseInt(m[1], 10)
+          deleted += parseInt(m[2], 10)
+        }
+      }
+      let branch: string | undefined
+      try {
+        const { stdout: branchOut } = await execAsync('git branch --show-current', { encoding: 'utf-8', timeout: 2000, cwd, env: process.env })
+        branch = branchOut.trim() || undefined
+      } catch { /* not on a branch */ }
+      return added || deleted || branch ? { added, deleted, branch } : null
+    } catch {
+      return null
+    }
+  })
+
   // ── Models ─────────────────────────────────────────────────────────────
   ipcMain.handle('get-models', async () => {
     return getPiModels()

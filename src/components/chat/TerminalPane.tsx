@@ -61,6 +61,9 @@ export function TerminalPane({
   const [searchCurrent, setSearchCurrent] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Git diff stats
+  const [gitDiff, setGitDiff] = useState<{ added: number; deleted: number; branch?: string } | null>(null);
+
   useEffect(() => {
     onPtyExitRef.current = onPtyExit;
   });
@@ -344,6 +347,30 @@ export function TerminalPane({
       });
   }, [workspacePath, sessionPath]);
 
+  // Poll git diff stats
+  useEffect(() => {
+    if (!workspacePath) {
+      setGitDiff(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const diff = await window.electron.getGitDiff(workspacePath);
+        if (!cancelled) setGitDiff(diff);
+      } catch {
+        if (!cancelled) setGitDiff(null);
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [workspacePath]);
+
   // Spawn or switch PTY when ptyKey changes
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -600,6 +627,23 @@ export function TerminalPane({
               </span>
             </>
           )}
+          <div className="ml-auto flex items-center gap-2 text-[11px] tabular-nums">
+            {gitDiff?.branch && (
+              <span className="rounded bg-muted/60 px-1.5 py-0.5 text-muted-foreground font-mono">
+                {gitDiff.branch}
+              </span>
+            )}
+            {gitDiff && (gitDiff.added > 0 || gitDiff.deleted > 0) && (
+              <>
+                <span className="text-green-500">
+                  +{gitDiff.added}
+                </span>
+                <span className="text-red-400">
+                  −{gitDiff.deleted}
+                </span>
+              </>
+            )}
+          </div>
         </div>
       )}
 
